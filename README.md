@@ -45,7 +45,7 @@ For **Video-MME**, **LongVideoBench**, **MLVU** evaluation, please use  [`lmms-e
 ```bash
 accelerate launch --num_processes 8 --main_process_port 12345 -m lmms_eval \
     --model longva \
-    --model_args pretrained=videoxl_checkpoint_15000,conv_template=qwen_1_5,model_name=llava_qwen,max_frames_num=128,video_decode_backend=decord\
+    --model_args pretrained=lmms-lab/LongVA-7B,conv_template=qwen_1_5,model_name=llava_qwen,max_frames_num=128,video_decode_backend=decord\
     --tasks videomme \
     --batch_size 1 \
     --log_samples \
@@ -56,22 +56,6 @@ accelerate launch --num_processes 8 --main_process_port 12345 -m lmms_eval \
 <summary>Expand to see the performance on Video-MME and MLVU</summary>
 <IMG src="./assets/videomme.png"/>
 </details>
-
-For **VNBench** evaluation, download [VNBench](https://github.com/joez17/VideoNIAH) and use the following script
-```bash
-bash eval/eval_vnbench.sh
-```
-<details>
-<summary>Expand to see the performance on VNbench and LongVideoBench</summary>
-<IMG src="./assets/vnbench.png"/>
-</details>
-
-## Needle-in-a-haystack evaluation
-To be coming soon
-
-## Training Data
-Please refer to [train_samples](./assets/train_example.json) so you can finetune with your own image or video data.
-We have realsed our trainiing data in [link](https://huggingface.co/datasets/sy1998/Video_XL_Training/tree/main).
 
 ## Citation
 If you find this repository useful, please consider giving a star :star: and citation
