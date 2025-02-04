@@ -34,7 +34,7 @@ pip install -r requirements.txt
 cd LongVA/
 python -m pip install -e "longva/.[train]"
 pip install transformers==4.46.3
-pip install -q bitsandbytes==0.41.3 accelerate==0.25.0
+pip install -q bitsandbytes==0.41.3 accelerate==0.26.0
 cd lmms-eval
 pip install -e .
 ```
