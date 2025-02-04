@@ -40,13 +40,11 @@ pip install -e .
 ```
 
 ## Long Video Benchmark Evaluation
-For **MLVU**, **Video-MME**, **LongVideoBench** evaluation, please use  [`lmms-eval`](https://github.com/EvolvingLMMs-Lab/lmms-eval) After installing `lmms-eval` and videoxl, you can use the following script to evaluate.
-
-First, put the [`video_xl.py`](https://github.com/VectorSpaceLab/Video-XL/blob/main/eval/videoxl.py) in lmms-eval/lmms_eval/models. Then add "video_xl" in lmms-eval/lmms_eval/models/__init__.py. Lastly, run the following code.
+For **Video-MME**, **LongVideoBench**, **MLVU** evaluation, please use  [`lmms-eval`](https://github.com/EvolvingLMMs-Lab/lmms-eval) After installing `lmms-eval` and CoS, you can use the following script to evaluate. note now our baseline is LongVA, you can extend our CoS to any baselines by modifying codes in lmms-eval folders.
 
 ```bash
 accelerate launch --num_processes 8 --main_process_port 12345 -m lmms_eval \
-    --model videoxl \
+    --model longva \
     --model_args pretrained=videoxl_checkpoint_15000,conv_template=qwen_1_5,model_name=llava_qwen,max_frames_num=128,video_decode_backend=decord\
     --tasks videomme \
     --batch_size 1 \
