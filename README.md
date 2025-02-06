@@ -71,8 +71,7 @@ If you find this repository useful, please consider giving a star :star: and cit
 
 ## Acknowledgement
 - LongVA: the codebase we built upon. 
-- LMMs-Eval: the codebase we used for evaluation.
-- Activation Beacon: The compression methods we referring.
+- LMMs-Eval: the codebase we built for CoS and evaluation.
 
 ## License
 This project utilizes certain datasets and checkpoints that are subject to their respective original licenses. Users must comply with all terms and conditions of these original licenses.
