@@ -44,7 +44,7 @@ For **Video-MME**, **LongVideoBench**, **MLVU** evaluation, please use  [`lmms-e
 
 ```bash
 accelerate launch --num_processes 8 --main_process_port 12345 -m lmms_eval \
-    --model longva \
+    --model longva_cos \
     --model_args pretrained=lmms-lab/LongVA-7B,conv_template=qwen_1_5,model_name=llava_qwen,max_frames_num=128,video_decode_backend=decord\
     --tasks videomme \
     --batch_size 1 \
