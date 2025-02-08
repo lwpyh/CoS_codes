@@ -1,5 +1,5 @@
 <p align="center">
-    <img src="./assets/logo.jpg" width="100">
+    <img src="frame_CoS.png" width="1000">
 </p>
 
 
