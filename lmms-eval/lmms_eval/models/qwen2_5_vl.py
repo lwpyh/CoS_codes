@@ -9,13 +9,17 @@ from accelerate import Accelerator, DistributedType
 from loguru import logger as eval_logger
 from PIL import Image
 from tqdm import tqdm
-from transformers import AutoProcessor, AutoTokenizer, Qwen2VLForConditionalGeneration
+from transformers import (
+    AutoProcessor,
+    AutoTokenizer,
+    Qwen2_5_VLForConditionalGeneration,
+)
 
 from lmms_eval import utils
 from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
-from lmms_eval.models.model_utils.load_video import load_video_decord
+from lmms_eval.models.model_utils.load_video import read_video_pyav_base64
 
 try:
     from qwen_vl_utils import process_vision_info
@@ -23,29 +27,40 @@ except ImportError:
     eval_logger.warning("Failed to import qwen_vl_utils; Please install it via `pip install qwen-vl-utils`")
 
 
-@register_model("qwen2_vl")
-class Qwen2_VL(lmms):
+@register_model("qwen2_5_vl")
+class Qwen2_5_VL(lmms):
     """
-    Qwen2_VL Model
-    "https://github.com/QwenLM/Qwen2-VL"
+    Qwen2.5_VL Model
+    "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct"
     """
 
     def __init__(
         self,
-        pretrained: str = "Qwen/Qwen2-VL-7B-Instruct",
+        pretrained: str = "Qwen/Qwen2.5-VL-3B-Instruct",
         device: Optional[str] = "cuda",
-        device_map: Optional[str] = "cuda",
+        device_map: Optional[str] = "auto",
         batch_size: Optional[Union[int, str]] = 1,
         use_cache=True,
         use_flash_attention_2: Optional[bool] = False,
-        max_pixels: int = 12845056,
-        min_pixels: int = 3136,
+        min_pixels: int = 256 * 28 * 28,
+        max_pixels: int = 1605632,
         max_num_frames: int = 32,
+        use_custom_video_loader: Optional[bool] = False,
+        fps: Optional[float] = None,  # Only applicable if use_custom_video_loader is True
+        max_image_size: Optional[int] = None,  # Only applicable if use_custom_video_loader is True
         **kwargs,
     ) -> None:
         super().__init__()
         # Do not use kwargs for now
         assert kwargs == {}, f"Unexpected kwargs: {kwargs}"
+
+        self.use_custom_video_loader = use_custom_video_loader
+        self.fps = fps
+        # if self.fps and not self.use_custom_video_loader:
+        #     raise ValueError("FPS is only applicable if use_custom_video_loader is True")
+        self.max_image_size = max_image_size
+        if self.max_image_size and not self.use_custom_video_loader:
+            raise ValueError("max_image_size is only applicable if use_custom_video_loader is True")
 
         accelerator = Accelerator()
         if accelerator.num_processes > 1:
@@ -59,18 +74,19 @@ class Qwen2_VL(lmms):
             self.device_map = f"cuda:{accelerator.local_process_index}"
 
         if use_flash_attention_2:
-            self._model = Qwen2VLForConditionalGeneration.from_pretrained(
+            self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                 pretrained,
-                torch_dtype="auto",
+                torch_dtype=torch.bfloat16,
                 device_map=self.device_map,
                 attn_implementation="flash_attention_2",
             ).eval()
         else:
-            self._model = Qwen2VLForConditionalGeneration.from_pretrained(pretrained, torch_dtype="auto", device_map=self.device_map).eval()
+            self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(pretrained, torch_dtype="auto", device_map=self.device_map).eval()
         self.processor = AutoProcessor.from_pretrained(pretrained, max_pixels=max_pixels, min_pixels=min_pixels)
         self.max_pixels = max_pixels
         self.min_pixels = min_pixels
         self.max_num_frames = max_num_frames
+        self.processor = AutoProcessor.from_pretrained(pretrained, max_pixels=max_pixels, min_pixels=min_pixels)
         self._tokenizer = AutoTokenizer.from_pretrained(pretrained)
 
         self._config = self.model.config
@@ -137,7 +153,7 @@ class Qwen2_VL(lmms):
         return self._world_size
 
     def loglikelihood(self, requests: List[Instance]) -> List[Tuple[float, bool]]:
-        raise NotImplementedError("Loglikelihood is not implemented for Qwen2_VL")
+        raise NotImplementedError("Loglikelihood is not implemented for Qwen2.5_VL")
 
     def flatten(self, input):
         new_list = []
@@ -185,29 +201,45 @@ class Qwen2_VL(lmms):
                 elif not isinstance(until, list):
                     raise ValueError(f"Expected `gen_kwargs['until']` to be of type Union[str,list] but got {type(until)}")
 
-            if isinstance(contexts, tuple):
-                contexts = list(contexts)
+            # if isinstance(contexts, tuple):
+            #     contexts = list(contexts)
 
-            for i in range(len(contexts)):
-                if "<image>" in contexts[i]:
-                    contexts[i] = contexts[i].replace("<image>", "")
+            # for i in range(len(contexts)):
+            #     for j in range(32):
+            #         if f"<image {j}>" in contexts[i]:
+            #             contexts[i] = contexts[i].replace(f"<image {j}>", "<image>")
+            #         if f"\\<image {j}\\>" in contexts[i]:
+            #             contexts[i] = contexts[i].replace(f"\\<image {j}\\>", "<image>")
+            # if "<image>" in contexts[i]:
+            #     contexts[i] = contexts[i].replace("<image>", "")
+            # print(contexts[i])
+
+            # for i in range(len(contexts)):
+            #     if "<image>" in contexts[i]:
+            #         contexts[i] = contexts[i].replace("<image>", "")
 
             messages = []
             processed_visuals = []
             for i, context in enumerate(contexts):
-                if "<image>" in context:
-                    context = context.replace("<image>", "")
+                # context += "\nPlease think step by step."
+                # if "<image>" in context:
+                #     context = context.replace("<image>", "")
 
                 message = [{"role": "system", "content": "You are a helpful assistant."}]
 
                 if len(visuals) > 0:
                     visual = visuals[i] if i < len(visuals) else None
                     if isinstance(visual, str) and visual.endswith((".mp4", ".avi", ".mov")):  # Video file
-                        vr = decord.VideoReader(visual)
-                        first_frame = vr[0].asnumpy()
-                        height, width = first_frame.shape[:2]
-                        # max_pixels = height * width
-                        message.append({"role": "user", "content": [{"type": "video", "video": visual, "max_pixels": self.max_pixels}, {"type": "text", "text": context}]})
+                        if self.use_custom_video_loader:
+                            visual = read_video_pyav_base64(visual, num_frm=self.max_num_frames, fps=self.fps, img_format="JPEG", max_image_size=self.max_image_size)
+                            image_contents = list(map(lambda x: f"data:image/jpeg;base64,{x}", visual))
+                            message.append({"role": "user", "content": [{"type": "video", "video": image_contents}, {"type": "text", "text": context}]})
+                        else:
+                            vr = decord.VideoReader(visual)
+                            first_frame = vr[0].asnumpy()
+                            height, width = first_frame.shape[:2]
+                            # max_pixels = height * width
+                            message.append({"role": "user", "content": [{"type": "video", "video": visual, "max_pixels": 360 * 420}, {"type": "text", "text": context}]})
                     elif isinstance(visual, Image.Image):  # Single image
                         base64_image = visual.convert("RGB")
                         buffer = BytesIO()
@@ -231,17 +263,18 @@ class Qwen2_VL(lmms):
                     message.append({"role": "user", "content": [{"type": "text", "text": context}]})
 
                 messages.append(message)
+            # print("message")
 
-            texts = [self.processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True) for msg in messages]
+            text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             image_inputs, video_inputs = process_vision_info(messages)
-            if video_inputs is not None:
-                total_frames = video_inputs[0].shape[0]
-                indices = np.linspace(0, total_frames - 1, self.max_num_frames, dtype=int)
-                # Append the last frame index if not already included
-                if total_frames - 1 not in indices:
-                    indices = np.append(indices, total_frames - 1)
-                video_inputs[0] = video_inputs[0][indices]
-            inputs = self.processor(text=texts, images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
+            inputs = self.processor(
+                text=text,
+                images=image_inputs,
+                videos=video_inputs,
+                # fps=self.fps,
+                padding=True,
+                return_tensors="pt",
+            )
 
             if self.device_map == "auto":
                 inputs = inputs.to("cuda")
@@ -249,7 +282,7 @@ class Qwen2_VL(lmms):
                 inputs = inputs.to(self.device)
 
             if "max_new_tokens" not in gen_kwargs:
-                gen_kwargs["max_new_tokens"] = 128
+                gen_kwargs["max_new_tokens"] = 4096
             if "temperature" not in gen_kwargs:
                 gen_kwargs["temperature"] = 0
             if "top_p" not in gen_kwargs:
@@ -267,16 +300,13 @@ class Qwen2_VL(lmms):
                 temperature=gen_kwargs["temperature"],
                 top_p=gen_kwargs["top_p"],
                 num_beams=gen_kwargs["num_beams"],
-                max_new_tokens=gen_kwargs["max_new_tokens"],
+                max_new_tokens=4096,
                 use_cache=self.use_cache,
             )
 
             generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, cont)]
             answers = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
             for i, ans in enumerate(answers):
-                for term in until:
-                    if len(term) > 0:
-                        ans = ans.split(term)[0]
                 answers[i] = ans
 
             for ans, context in zip(answers, contexts):

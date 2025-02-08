@@ -1,62 +1,81 @@
-import warnings
+import math
+from datetime import timedelta
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
-import PIL
 import torch
-from accelerate import Accelerator, DistributedType
+from accelerate import Accelerator, DistributedType, InitProcessGroupKwargs
 from accelerate.state import AcceleratorState
-from decord import VideoReader, cpu
-from torchvision.transforms.functional import to_pil_image
+from loguru import logger
 from tqdm import tqdm
-from transformers import AutoConfig, AutoProcessor, MllamaForConditionalGeneration
+from transformers import AutoConfig
 
 from lmms_eval import utils
 from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
+from lmms_eval.utils import stop_sequences_criteria
 
-warnings.filterwarnings("ignore")
+eval_logger = logger
 
-from loguru import logger as eval_logger
+from transformers import VideoLlavaForConditionalGeneration, VideoLlavaProcessor
 
-DEFAULT_IMAGE_TOKEN = "<|image|>"
+from lmms_eval.models.model_utils.load_video import read_video_pyav
 
 
-@register_model("llama_vision")
-class LlamaVision(lmms):
+@register_model("video_llava")
+class VideoLLaVA(lmms):
     def __init__(
         self,
-        pretrained: str = "meta-llama/Llama-3.2-11B-Vision",
-        revision: str = "main",
-        device: str = "cuda",
+        pretrained: str = "LanguageBind/Video-LLaVA-7B-hf",
+        truncation: Optional[bool] = True,
+        device: Optional[str] = "cuda:0",
         dtype: Optional[Union[str, torch.dtype]] = "auto",
-        batch_size: int = 1,
+        batch_size: Optional[Union[int, str]] = 1,
         trust_remote_code: Optional[bool] = False,
-        attn_implementation: Optional[str] = None,
-        device_map: str = "",
-        max_frames_num: Optional[int] = 32,
+        revision=None,
+        attn_implementation=(
+            "sdpa" if torch.__version__ > "2.1.2" else "eager"
+        ),  # inference implementation for attention, can be "sdpa", "eager", "flash_attention_2". Seems FA2 is not effective during inference: https://discuss.huggingface.co/t/flash-attention-has-no-effect-on-inference/73453/5
+        device_map="cuda:0",
+        conv_template="llava_v1",
+        use_cache=True,
+        truncate_context=False,
+        num_frames: int = 8,  # whether to truncate the context in generation, set it False for LLaVA-1.6
         **kwargs,
     ) -> None:
         super().__init__()
-        # Do not use kwargs for now
-        assert kwargs == {}, f"Unexpected kwargs: {kwargs}"
-
-        accelerator = Accelerator()
-        if accelerator.num_processes > 1 and device_map == "":
+        accelerator_kwargs = InitProcessGroupKwargs(timeout=timedelta(weeks=52))
+        accelerator = Accelerator(kwargs_handlers=[accelerator_kwargs])
+        if accelerator.num_processes > 1:
             self._device = torch.device(f"cuda:{accelerator.local_process_index}")
             self.device_map = f"cuda:{accelerator.local_process_index}"
-        else:
+        elif accelerator.num_processes == 1 and device_map == "auto":
             self._device = torch.device(device)
             self.device_map = device_map
-        if isinstance(dtype, str) and dtype != "auto":
-            dtype = getattr(torch, dtype)
+        else:
+            self._device = torch.device(f"cuda:{accelerator.local_process_index}")
+            self.device_map = f"cuda:{accelerator.local_process_index}"
 
-        self.max_frames_num = max_frames_num
-        self._model = MllamaForConditionalGeneration.from_pretrained(pretrained, revision=revision, torch_dtype=dtype, device_map=self.device_map, trust_remote_code=trust_remote_code, attn_implementation=attn_implementation)
+        self.pretrained = pretrained
+        self._model = VideoLlavaForConditionalGeneration.from_pretrained(pretrained)
+        self._processor = VideoLlavaProcessor.from_pretrained(pretrained)
+        self.prompt = "USER: <video>{}? ASSISTANT:"
+        self.num_frames = num_frames
+        assert num_frames == 8, "num_frames must be 8 https://github.com/huggingface/transformers/blob/bdb9106f247fca48a71eb384be25dbbd29b065a8/src/transformers/models/video_llava/modeling_video_llava.py#L379"
+        # self.model_name = get_model_name_from_path(pretrained)
+        # self._tokenizer, self._model, self.processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, device_map=self.device_map)
+        # self.video_processor = self.processor["video"]
+        self._config = self._model.config
         self.model.eval()
-        self.processor = AutoProcessor.from_pretrained(pretrained)
-        if accelerator.num_processes > 1 and device_map == "":
+        self.model.tie_weights()
+        self.truncation = truncation
+        self.batch_size_per_gpu = int(batch_size)
+        self.conv_template = conv_template
+        self.use_cache = use_cache
+        self.truncate_context = truncate_context
+        # assert self.batch_size_per_gpu == 1, "Llava currently does not support batched generation. See https://github.com/haotian-liu/LLaVA/issues/754. HF Llava also has this issue."
+        if accelerator.num_processes > 1:
             assert accelerator.distributed_type in [DistributedType.FSDP, DistributedType.MULTI_GPU, DistributedType.DEEPSPEED], "Unsupported distributed type provided. Only DDP and FSDP are supported."
             # If you want to use DistributedType.DEEPSPEED, you have to run accelerate config before using the model
             # Also, you have to select zero stage 0 (equivalent to DDP) in order to make the prepare model works
@@ -78,15 +97,14 @@ class LlamaVision(lmms):
             self._rank = self.accelerator.local_process_index
             self._world_size = self.accelerator.num_processes
         elif accelerator.num_processes == 1 and device_map == "auto":
-            eval_logger.info(f"Using {accelerator.num_processes} devices with pipeline parallelism")
+            eval_logger.info(f"Using {accelerator.num_processes} devices with tensor parallelism")
             self._rank = 0
             self._word_size = 1
         else:
             eval_logger.info(f"Using single device: {self._device}")
             self.model.to(self._device)
             self._rank = 0
-            self._word_size = 1
-        self.accelerator = accelerator
+            self._world_size = 1
 
     @property
     def config(self):
@@ -114,6 +132,14 @@ class LlamaVision(lmms):
     def max_length(self):
         return self._max_length
 
+    def pad_sequence(self, input_ids, batch_first, padding_value):
+        if self.tokenizer.padding_side == "left":
+            input_ids = [torch.flip(_input_ids, [0]) for _input_ids in input_ids]
+        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=batch_first, padding_value=padding_value)
+        if self.tokenizer.padding_side == "left":
+            input_ids = torch.flip(input_ids, [1])
+        return input_ids
+
     @property
     def batch_size(self):
         return self.batch_size_per_gpu
@@ -139,11 +165,8 @@ class LlamaVision(lmms):
             encoding = encoding[-left_truncate_len:]
         return encoding
 
-    def tok_decode(self, tokens):
-        return self.tokenizer.decode(tokens)
-
     def loglikelihood(self, requests: List[Instance]) -> List[Tuple[float, bool]]:
-        assert False, "Not implemented"
+        return super().loglikelihood(requests)
 
     def flatten(self, input):
         new_list = []
@@ -152,42 +175,24 @@ class LlamaVision(lmms):
                 new_list.append(j)
         return new_list
 
-    def load_video(self, video_path, max_frames_num):
-        if type(video_path) == str:
-            vr = VideoReader(video_path, ctx=cpu(0))
-        else:
-            vr = VideoReader(video_path[0], ctx=cpu(0))
-        total_frame_num = len(vr)
-        uniform_sampled_frames = np.linspace(0, total_frame_num - 1, max_frames_num, dtype=int)
-        frame_idx = uniform_sampled_frames.tolist()
-        spare_frames = vr.get_batch(frame_idx).asnumpy()
-        return spare_frames  # (frames, height, width, channels)
-
-    def generate_until(self, requests: List[Instance]) -> List[str]:
+    def generate_until(self, requests) -> List[str]:
         res = []
-
         pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="Model Responding")
 
         for contexts, gen_kwargs, doc_to_visual, doc_id, task, split in [reg.args for reg in requests]:
+            # encode, pad, and truncate contexts for this batch
             visuals = [doc_to_visual(self.task_dict[task][split][doc_id])]
             visuals = self.flatten(visuals)
+            assert len(visuals) == 1
+            clip = read_video_pyav(visuals[0], self.num_frames)
 
-            messages = [{"role": "user", "content": []}]
-            images = []
-
-            for visual in visuals:
-                if isinstance(visual, str):
-                    frames = self.load_video(visual, self.max_frames_num)
-                    frames = torch.from_numpy(frames).permute(0, 3, 1, 2)
-                    images.extend([to_pil_image(frame) for frame in frames])
-                elif isinstance(visual, PIL.Image.Image):
-                    images.append(visual)
-
-            for _ in range(len(images)):
-                messages[-1]["content"].append({"type": "image"})
-            messages[-1]["content"].append({"type": "text", "text": contexts})
-            prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True)
-            inputs = self.processor(images, prompt, add_special_tokens=False, return_tensors="pt").to(self.model.device)
+            inputs = self._processor(text=self.prompt.format(contexts), videos=clip, return_tensors="pt")
+            pixel_values_videos = inputs["pixel_values_videos"]
+            if pixel_values_videos.shape[1] != self.num_frames:
+                empty_frames = torch.zeros((1, self.num_frames - pixel_values_videos.shape[1], *pixel_values_videos.shape[2:]), dtype=pixel_values_videos.dtype)
+                pixel_values_videos = torch.cat([pixel_values_videos, empty_frames], dim=1)
+                inputs["pixel_values_videos"] = pixel_values_videos
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
             if "max_new_tokens" not in gen_kwargs:
                 gen_kwargs["max_new_tokens"] = 1024
@@ -197,22 +202,13 @@ class LlamaVision(lmms):
                 gen_kwargs["top_p"] = None
             if "num_beams" not in gen_kwargs:
                 gen_kwargs["num_beams"] = 1
-            if "do_sample" not in gen_kwargs:
-                gen_kwargs["do_sample"] = False
 
-            with torch.no_grad():
-                output = self.model.generate(
-                    **inputs,
-                    max_new_tokens=gen_kwargs["max_new_tokens"],
-                    temperature=gen_kwargs["temperature"],
-                    do_sample=gen_kwargs["do_sample"],
-                )
-                output = output[:, inputs["input_ids"].shape[-1] :]
-                res.append(self.processor.decode(output[0], skip_special_tokens=True))
+            generate_ids = self.model.generate(**inputs, max_new_tokens=gen_kwargs["max_new_tokens"], temperature=gen_kwargs["temperature"])
 
+            outputs = self._processor.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].split("ASSISTANT:")[-1].strip()
+            res.append(outputs)
             pbar.update(1)
-        pbar.close()
         return res
 
     def generate_until_multi_round(self, requests) -> List[str]:
-        raise NotImplementedError("TODO: Implement multi-round generation for LLaVAHF")
+        raise NotImplementedError("TODO: Implement multi-round generation")

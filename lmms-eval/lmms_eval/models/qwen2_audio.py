@@ -3,44 +3,36 @@ from io import BytesIO
 from typing import List, Optional, Tuple, Union
 
 import decord
-import numpy as np
 import torch
 from accelerate import Accelerator, DistributedType
 from loguru import logger as eval_logger
-from PIL import Image
 from tqdm import tqdm
-from transformers import AutoProcessor, AutoTokenizer, Qwen2VLForConditionalGeneration
+from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
 
 from lmms_eval import utils
 from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
-from lmms_eval.models.model_utils.load_video import load_video_decord
-
-try:
-    from qwen_vl_utils import process_vision_info
-except ImportError:
-    eval_logger.warning("Failed to import qwen_vl_utils; Please install it via `pip install qwen-vl-utils`")
+from lmms_eval.models.model_utils.audio_processing import downsample_audio
 
 
-@register_model("qwen2_vl")
-class Qwen2_VL(lmms):
+@register_model("qwen2_audio")
+class Qwen2_Audio(lmms):
     """
-    Qwen2_VL Model
-    "https://github.com/QwenLM/Qwen2-VL"
+    Qwen2_Audio Model
+    "https://github.com/QwenLM/Qwen2-Audio"
     """
 
     def __init__(
         self,
-        pretrained: str = "Qwen/Qwen2-VL-7B-Instruct",
+        pretrained: str = "Qwen/Qwen2-Audio-7B",  # Qwen/Qwen2-Audio-7B-Instruct
         device: Optional[str] = "cuda",
         device_map: Optional[str] = "cuda",
         batch_size: Optional[Union[int, str]] = 1,
         use_cache=True,
-        use_flash_attention_2: Optional[bool] = False,
-        max_pixels: int = 12845056,
-        min_pixels: int = 3136,
-        max_num_frames: int = 32,
+        add_generation_prompt: bool = True,
+        add_system_prompt: bool = True,
+        simple_prompt: bool = False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -48,6 +40,11 @@ class Qwen2_VL(lmms):
         assert kwargs == {}, f"Unexpected kwargs: {kwargs}"
 
         accelerator = Accelerator()
+        self.add_generation_prompt = add_generation_prompt
+        self.add_system_prompt = add_system_prompt
+        # If using simple prompt, only add "<|audio_bos|><|AUDIO|><|audio_eos|>"
+        # and then prompt to align with original Qwen2 Audio
+        self.simple_prompt = simple_prompt
         if accelerator.num_processes > 1:
             self._device = torch.device(f"cuda:{accelerator.local_process_index}")
             self.device_map = f"cuda:{accelerator.local_process_index}"
@@ -58,20 +55,40 @@ class Qwen2_VL(lmms):
             self._device = torch.device(f"cuda:{accelerator.local_process_index}")
             self.device_map = f"cuda:{accelerator.local_process_index}"
 
-        if use_flash_attention_2:
-            self._model = Qwen2VLForConditionalGeneration.from_pretrained(
-                pretrained,
-                torch_dtype="auto",
-                device_map=self.device_map,
-                attn_implementation="flash_attention_2",
-            ).eval()
-        else:
-            self._model = Qwen2VLForConditionalGeneration.from_pretrained(pretrained, torch_dtype="auto", device_map=self.device_map).eval()
-        self.processor = AutoProcessor.from_pretrained(pretrained, max_pixels=max_pixels, min_pixels=min_pixels)
-        self.max_pixels = max_pixels
-        self.min_pixels = min_pixels
-        self.max_num_frames = max_num_frames
-        self._tokenizer = AutoTokenizer.from_pretrained(pretrained)
+        self._model = Qwen2AudioForConditionalGeneration.from_pretrained(
+            pretrained,
+            torch_dtype="auto",
+            device_map=self.device_map,
+        ).eval()
+
+        self.processor = AutoProcessor.from_pretrained(pretrained)
+        self.processor.tokenizer.padding_side = "left"
+        self._tokenizer = self.processor.tokenizer
+
+        if not self.add_system_prompt:
+            # Overwrite chat template to exclude system prompt
+            self.processor.chat_template = (
+                "{% set audio_count = namespace(value=0) %}"
+                "{% for message in messages %}"
+                "<|im_start|>{{ message['role'] }}\n"
+                "{% if message['content'] is string %}"
+                "{{ message['content'] }}<|im_end|>\n"
+                "{% else %}"
+                "{% for content in message['content'] %}"
+                "{% if 'audio' in content or 'audio_url' in content %}"
+                "{% set audio_count.value = audio_count.value + 1 %}"
+                "Audio {{ audio_count.value }}: <|audio_bos|><|AUDIO|><|audio_eos|>\n"
+                "{% elif 'text' in content %}"
+                "{{ content['text'] }}"
+                "{% endif %}"
+                "{% endfor %}"
+                "<|im_end|>\n"
+                "{% endif %}"
+                "{% endfor %}"
+                "{% if add_generation_prompt %}"
+                "<|im_start|>assistant\n"
+                "{% endif %}"
+            )
 
         self._config = self.model.config
         self.batch_size_per_gpu = int(batch_size)
@@ -92,6 +109,7 @@ class Qwen2_VL(lmms):
             self._rank = self.accelerator.local_process_index
             self._world_size = self.accelerator.num_processes
         else:
+            self.model.to(self._device)
             self._rank = 0
             self._word_size = 1
 
@@ -137,7 +155,7 @@ class Qwen2_VL(lmms):
         return self._world_size
 
     def loglikelihood(self, requests: List[Instance]) -> List[Tuple[float, bool]]:
-        raise NotImplementedError("Loglikelihood is not implemented for Qwen2_VL")
+        raise NotImplementedError("Loglikelihood is not implemented for Qwen2_Audio")
 
     def flatten(self, input):
         new_list = []
@@ -169,9 +187,11 @@ class Qwen2_VL(lmms):
             contexts, all_gen_kwargs, doc_to_visual, doc_id, task, split = zip(*chunk)
             task = task[0]
             split = split[0]
-            visuals = [doc_to_visual[0](self.task_dict[task][split][ids]) for ids in doc_id]
-            visuals = self.flatten(visuals)
+            batched_audios = [doc_to_visual[0](self.task_dict[task][split][ids]) for ids in doc_id]
+            flattened_audios = self.flatten(batched_audios)
 
+            # we assume all gen kwargs in the batch are the same
+            # this is safe to assume because the `grouper` object ensures it.
             gen_kwargs = all_gen_kwargs[0]
 
             # Set default values for until and max_new_tokens
@@ -185,63 +205,28 @@ class Qwen2_VL(lmms):
                 elif not isinstance(until, list):
                     raise ValueError(f"Expected `gen_kwargs['until']` to be of type Union[str,list] but got {type(until)}")
 
+            # contexts = "<|audio_bos|><|AUDIO|><|audio_eos|>" + contexts
+
             if isinstance(contexts, tuple):
                 contexts = list(contexts)
 
-            for i in range(len(contexts)):
-                if "<image>" in contexts[i]:
-                    contexts[i] = contexts[i].replace("<image>", "")
+            if not self.simple_prompt:
+                conversations = []
+                for idx, context in enumerate(contexts):
+                    conv = [{"role": "user", "content": []}]
+                    for _ in batched_audios[idx]:
+                        # This placeholder is just use to make chat template work
+                        # We already have the sampled audio array
+                        conv[0]["content"].append({"type": "audio", "audio_url": "placeholder.wav"})
+                    conv[0]["content"].append({"type": "text", "text": context})
+                    conversations.append(conv)
 
-            messages = []
-            processed_visuals = []
-            for i, context in enumerate(contexts):
-                if "<image>" in context:
-                    context = context.replace("<image>", "")
+                text = [self.processor.apply_chat_template(conversation, add_generation_prompt=self.add_generation_prompt, tokenize=False) for conversation in conversations]
+            else:
+                text = ["<|audio_bos|><|AUDIO|><|audio_eos|>" + context for context in contexts]
+            audios = [downsample_audio(audio["array"], audio["sampling_rate"], self.processor.feature_extractor.sampling_rate) for audio in flattened_audios]
 
-                message = [{"role": "system", "content": "You are a helpful assistant."}]
-
-                if len(visuals) > 0:
-                    visual = visuals[i] if i < len(visuals) else None
-                    if isinstance(visual, str) and visual.endswith((".mp4", ".avi", ".mov")):  # Video file
-                        vr = decord.VideoReader(visual)
-                        first_frame = vr[0].asnumpy()
-                        height, width = first_frame.shape[:2]
-                        # max_pixels = height * width
-                        message.append({"role": "user", "content": [{"type": "video", "video": visual, "max_pixels": self.max_pixels}, {"type": "text", "text": context}]})
-                    elif isinstance(visual, Image.Image):  # Single image
-                        base64_image = visual.convert("RGB")
-                        buffer = BytesIO()
-                        base64_image.save(buffer, format="JPEG")
-                        base64_bytes = base64.b64encode(buffer.getvalue())
-                        base64_string = base64_bytes.decode("utf-8")
-                        message.append({"role": "user", "content": [{"type": "image", "image": f"data:image/jpeg;base64,{base64_string}"}, {"type": "text", "text": context}]})
-                    elif isinstance(visual, (list, tuple)) and all(isinstance(v, Image.Image) for v in visual):  # Multiple images
-                        image_content = []
-                        for v in visual:
-                            base64_image = v.convert("RGB")
-                            buffer = BytesIO()
-                            base64_image.save(buffer, format="JPEG")
-                            base64_bytes = base64.b64encode(buffer.getvalue())
-                            base64_string = base64_bytes.decode("utf-8")
-                            image_content.append({"type": "image", "image": f"data:image/jpeg;base64,{base64_string}"})
-                        message.append({"role": "user", "content": image_content + [{"type": "text", "text": context}]})
-                    else:
-                        message.append({"role": "user", "content": [{"type": "text", "text": context}]})
-                else:
-                    message.append({"role": "user", "content": [{"type": "text", "text": context}]})
-
-                messages.append(message)
-
-            texts = [self.processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True) for msg in messages]
-            image_inputs, video_inputs = process_vision_info(messages)
-            if video_inputs is not None:
-                total_frames = video_inputs[0].shape[0]
-                indices = np.linspace(0, total_frames - 1, self.max_num_frames, dtype=int)
-                # Append the last frame index if not already included
-                if total_frames - 1 not in indices:
-                    indices = np.append(indices, total_frames - 1)
-                video_inputs[0] = video_inputs[0][indices]
-            inputs = self.processor(text=texts, images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
+            inputs = self.processor(text=text, audios=audios, return_tensors="pt", padding=True, sampling_rate=self.processor.feature_extractor.sampling_rate)
 
             if self.device_map == "auto":
                 inputs = inputs.to("cuda")
@@ -249,7 +234,7 @@ class Qwen2_VL(lmms):
                 inputs = inputs.to(self.device)
 
             if "max_new_tokens" not in gen_kwargs:
-                gen_kwargs["max_new_tokens"] = 128
+                gen_kwargs["max_new_tokens"] = 256
             if "temperature" not in gen_kwargs:
                 gen_kwargs["temperature"] = 0
             if "top_p" not in gen_kwargs:
@@ -257,33 +242,39 @@ class Qwen2_VL(lmms):
             if "num_beams" not in gen_kwargs:
                 gen_kwargs["num_beams"] = 1
 
-            pad_token_id = self.tokenizer.pad_token_id
+            try:
+                cont = self.model.generate(
+                    **inputs,
+                    do_sample=True if gen_kwargs["temperature"] > 0 else False,
+                    temperature=gen_kwargs["temperature"],
+                    top_p=gen_kwargs["top_p"],
+                    num_beams=gen_kwargs["num_beams"],
+                    max_new_tokens=gen_kwargs["max_new_tokens"],
+                    min_new_tokens=1,
+                    use_cache=self.use_cache,
+                )
 
-            cont = self.model.generate(
-                **inputs,
-                eos_token_id=self.tokenizer.eos_token_id,
-                pad_token_id=pad_token_id,
-                do_sample=True if gen_kwargs["temperature"] > 0 else False,
-                temperature=gen_kwargs["temperature"],
-                top_p=gen_kwargs["top_p"],
-                num_beams=gen_kwargs["num_beams"],
-                max_new_tokens=gen_kwargs["max_new_tokens"],
-                use_cache=self.use_cache,
-            )
+                # cont = self.model.generate(**inputs, max_new_tokens=256, min_new_tokens=1, do_sample=False)
 
-            generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, cont)]
-            answers = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
-            for i, ans in enumerate(answers):
-                for term in until:
-                    if len(term) > 0:
-                        ans = ans.split(term)[0]
-                answers[i] = ans
+                generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, cont)]
+                # generated_ids_trimmed = cont[:, inputs.input_ids.size(1):]
+                answers = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                for i, ans in enumerate(answers):
+                    for term in until:
+                        if len(term) > 0:
+                            ans = ans.split(term)[0]
+                    answers[i] = ans
+
+            except Exception as e:
+                eval_logger.debug(f"Error while generating: {e}. It is possibly due to blank audio in {contexts}")
+                answers = [""] * len(contexts)
 
             for ans, context in zip(answers, contexts):
                 res.append(ans)
                 self.cache_hook.add_partial("generate_until", (context, gen_kwargs), ans)
                 pbar.update(1)
-            # reorder this group of results back to original unsorted form
+
+        # reorder this group of results back to original unsorted form
         res = re_ords.get_original(res)
 
         pbar.close()

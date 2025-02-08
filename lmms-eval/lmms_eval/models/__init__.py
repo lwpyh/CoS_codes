@@ -31,7 +31,7 @@ AVAILABLE_MODELS = {
     "llava_sglang": "LlavaSglang",
     "llava_vid": "LlavaVid",
     "slime": "Slime",
-    "longva_cos": "LongVA",
+    "longva": "LongVA",
     "mantis": "Mantis",
     "minicpm_v": "MiniCPM_V",
     "minimonkey": "MiniMonkey",
@@ -40,6 +40,9 @@ AVAILABLE_MODELS = {
     "phi3v": "Phi3v",
     "qwen_vl": "Qwen_VL",
     "qwen2_vl": "Qwen2_VL",
+    "qwen2_5_vl": "Qwen2_5_VL",
+    "qwen2_5_vl_interleave": "Qwen2_5_VL_Interleave",
+    "qwen2_audio": "Qwen2_Audio",
     "qwen_vl_api": "Qwen_VL_API",
     "reka": "Reka",
     "srt_api": "SRT_API",
@@ -54,7 +57,8 @@ AVAILABLE_MODELS = {
     "videochat2": "VideoChat2",
     "llama_vision": "LlamaVision",
     "aria": "Aria",
-    "videoxl": "Videoxl",
+    "ross": "Ross",
+    "vita": "VITA",
 }
 
 
