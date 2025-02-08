@@ -25,9 +25,9 @@ conda activate videoxl
 # python -m pip install -e "longva/.[train]"
 # cd ..
 huggingface-cli login --token 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
-export OPENAI_API_KEY="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"
+export OPENAI_API_KEY=
 export DECORD_EOF_RETRY_MAX=20480 
-export HF_HOME="/data/home/acw652/.cache/huggingface"
+export HF_HOME=
 # git clone https://github.com/IDEA-Research/GroundingDINO.git
 # cd GroundingDINO/
 # pip install -e .
