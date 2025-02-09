@@ -1,0 +1,38 @@
+Variable OMP_NUM_THREADS has been set to 8
+The token has not been saved to the git credentials helper. Pass `add_to_git_credential=True` in this function directly or `--add-to-git-credential` if using via `huggingface-cli` if you want to set the git credential as well.
+Token is valid (permission: fineGrained).
+The token `default_token` has been saved to /data/home/acw652/.cache/huggingface/stored_tokens
+Your token has been saved to /data/home/acw652/.cache/huggingface/token
+Login successful.
+The current active token is: `default_token`
+The following values were not passed to `accelerate launch` and had defaults used instead:
+	`--num_machines` was set to a value of `1`
+	`--mixed_precision` was set to a value of `'no'`
+	`--dynamo_backend` was set to a value of `'no'`
+To avoid this warning pass in values for each of the problematic parameters or run `accelerate config`.
+[32m2025-02-08 21:32:06.776[0m | [1mINFO    [0m | [36m__main__[0m:[36mcli_evaluate[0m:[36m294[0m - [1mVerbosity set to INFO[0m
+Detected kernel version 3.10.0, which is below the recommended minimum of 5.5.0; this can cause the process to hang. It is recommended to upgrade the kernel to the minimum version or higher.
+[32m2025-02-08 21:32:10.035[0m | [1mINFO    [0m | [36m__main__[0m:[36mcli_evaluate_single[0m:[36m377[0m - [1mEvaluation tracker args: {'output_path': './logs/'}[0m
+[32m2025-02-08 21:32:10.035[0m | [1mINFO    [0m | [36m__main__[0m:[36mcli_evaluate_single[0m:[36m466[0m - [1mSelected Tasks: ['longvideobench_val_v'][0m
+[32m2025-02-08 21:32:10.093[0m | [1mINFO    [0m | [36mlmms_eval.evaluator[0m:[36msimple_evaluate[0m:[36m155[0m - [1mSetting random seed to 0 | Setting numpy seed to 1234 | Setting torch manual seed to 1234[0m
+Detected kernel version 3.10.0, which is below the recommended minimum of 5.5.0; this can cause the process to hang. It is recommended to upgrade the kernel to the minimum version or higher.
+Fetching 38 files:   0%|          | 0/38 [00:00<?, ?it/s]Fetching 38 files:   8%|▊         | 3/38 [00:00<00:01, 27.87it/s]Fetching 38 files:  50%|█████     | 19/38 [00:00<00:00, 102.17it/s]Fetching 38 files: 100%|██████████| 38/38 [00:00<00:00, 125.92it/s]
+Detected kernel version 3.10.0, which is below the recommended minimum of 5.5.0; this can cause the process to hang. It is recommended to upgrade the kernel to the minimum version or higher.
+You are using a model of type qwen2 to instantiate a model of type llava_qwen. This is not supported for all configurations of models and can yield errors.
+Loaded LLaVA model: lmms-lab/LongVA-7B
+Overwriting config with {'mm_spatial_pool_stride': 2, 'mm_spatial_pool_mode': 'average'}
+Loading vision tower: openai/clip-vit-large-patch14-336
+Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]Loading checkpoint shards:  25%|██▌       | 1/4 [00:08<00:24,  8.15s/it]Loading checkpoint shards:  50%|█████     | 2/4 [00:15<00:15,  7.92s/it]Loading checkpoint shards:  75%|███████▌  | 3/4 [00:24<00:08,  8.01s/it]Loading checkpoint shards: 100%|██████████| 4/4 [00:25<00:00,  5.42s/it]Loading checkpoint shards: 100%|██████████| 4/4 [00:25<00:00,  6.37s/it]
+Model Class: LlavaQwenForCausalLM
+[2025-02-08 21:32:50,730] [INFO] [real_accelerator.py:203:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[93m [WARNING] [0m async_io requires the dev libaio .so object and headers but these were not found.
+[93m [WARNING] [0m async_io: please install the libaio-devel package with yum
+[93m [WARNING] [0m If libaio is already installed (perhaps from source), try setting the CFLAGS and LDFLAGS environment variables to where it can be found.
+[93m [WARNING] [0m Please specify the CUTLASS repo directory as environment variable $CUTLASS_PATH
+[93m [WARNING] [0m sparse_attn requires a torch version >= 1.5 and < 2.0 but detected 2.1
+[93m [WARNING] [0m using untested triton version (2.1.0), only 1.0.0 is known to be compatible
+[32m2025-02-08 21:32:55.307[0m | [1mINFO    [0m | [36mlmms_eval.api.task[0m:[36mbuild_all_requests[0m:[36m425[0m - [1mBuilding contexts for longvideobench_val_v on rank 0...[0m
+  0%|          | 0/1337 [00:00<?, ?it/s]100%|██████████| 1337/1337 [00:00<00:00, 82363.25it/s]
+[32m2025-02-08 21:32:55.460[0m | [1mINFO    [0m | [36mlmms_eval.evaluator[0m:[36mevaluate[0m:[36m446[0m - [1mRunning generate_until requests[0m
+The `load_in_4bit` and `load_in_8bit` arguments are deprecated and will be removed in the future versions. Please, pass a `BitsAndBytesConfig` object in `quantization_config` argument instead.
+Loading checkpoint shards:   0%|          | 0/6 [00:00<?, ?it/s]
