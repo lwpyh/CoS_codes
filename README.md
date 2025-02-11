@@ -6,24 +6,17 @@
 
 ## CoS: Chain-of-Shot Prompting for Long Video Understanding
 <p align="center">
-    🌐 <a href="https://www.xiaohongshu.com/discovery/item/67172f5d0000000024017704?source=webshare&xhsshare=pc_web&xsec_token=GBL17lee3zbjumPCcki1x6IL0okkah9Lp3XX_IzlJwO4I=&xsec_source=pc_share" target="_blank">Website</a> | 📃 <a href="https://arxiv.org/pdf/2409.14485" target="_blank">Paper</a> 
+    🌐 <a href="https://lwpyh.github.io/CoS/" target="_blank">Website</a> | 📃 <a href="https://arxiv.org/pdf/2502.06428" target="_blank">Paper</a> 
 
 </p>
 
 ✨ **Highlights**:
 
-(i) Comprehensive long video understanding. Video-XL 7B achieves the **leading performance among 7B models** on MLVU, VideoMME, VNBench and LongVideoBench.
+(i) We are the first to approach long video understanding by optimising input video information to fully utilise the model’s ability to comprehend long videos.
+(ii) We propose a training-free mosaicing binary coding together with pseudo temporal grounding for long video understanding.
 
-(ii) Efficient Long visual context processing. Video-XL can process **2048 frames on an 80G GPU and achieves nearly 95% accuracy** on Needle-in-a-haystack evaluation.
+(iii) We apply our CoS into three various baseline to demonstrate its effectiveness and adaptability.
 
-(iii) Video-XL shows strong ability in some real-world scenarios, like **movie summarization, surveillance anomaly detection and Ad placement identification**.
-
-
-
-## News
-- [2024/12/22] 🔥 Most of the training data is released, including private baai-caption video data and VICO data. Feel free to use in [link](https://huggingface.co/datasets/sy1998/Video_XL_Training/tree/main). 
-- [2024/10/17] 🔥 Video-XL-7B weight is released, which can process max 1024 frames. The model can process 2048 frames is around the corner.
-- [2024/10/15] 🔥 Video-XL is released,  including model, training and evaluation code.
 
 ## Installation 
 ```bash
@@ -52,26 +45,23 @@ accelerate launch --num_processes 8 --main_process_port 12345 -m lmms_eval \
     --log_samples_suffix videoxl \
     --output_path ./logs/
 ```
-<details>
-<summary>Expand to see the performance on Video-MME and MLVU</summary>
-<IMG src="./assets/videomme.png"/>
-</details>
 
 ## Citation
 If you find this repository useful, please consider giving a star :star: and citation
 
 ```
-@article{shu2024video,
-  title={Video-XL: Extra-Long Vision Language Model for Hour-Scale Video Understanding},
-  author={Shu, Yan and Zhang, Peitian and Liu, Zheng and Qin, Minghao and Zhou, Junjie and Huang, Tiejun and Zhao, Bo},
-  journal={arXiv preprint arXiv:2409.14485},
-  year={2024}
+@article{jian2024CoS,
+  title={CoS: Chain-of-Shot Prompting for Long Video Understanding},
+  author={Jian, Hu and Zixu, Cheng and Chenyang, Si and Wei, Li and Shaogang, Gong},
+  journal={arXiv preprint arXiv:2502.06428},
+  year={2025}
 }
 ```
 
 ## Acknowledgement
 - LongVA: the codebase we built upon. 
 - LMMs-Eval: the codebase we built for CoS and evaluation.
+- Special thanks to Shu Yan for his generous and selfless help.
 
 ## License
 This project utilizes certain datasets and checkpoints that are subject to their respective original licenses. Users must comply with all terms and conditions of these original licenses.
