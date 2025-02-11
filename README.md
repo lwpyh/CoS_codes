@@ -10,9 +10,19 @@
 
 </p>
 
+<p align="center">
+    <a href="https://lwpyh.github.io/">Jian Hu</a>,&nbsp;&nbsp;
+    <a href="https://zxccade.github.io/">Zixu Cheng</a>,&nbsp;&nbsp;
+    <a href="https://chenyangsi.top/">Chenyang Si</a>,&nbsp;&nbsp;
+    <a href="https://weivision.github.io/">Wei Li</a>,&nbsp;&nbsp;
+    <a href="http://www.eecs.qmul.ac.uk/~sgg/">Shaogang Gong</a>
+</p>
+
+    
 ✨ **Highlights**:
 
 (i) We are the first to approach long video understanding by optimising input video information to fully utilise the model’s ability to comprehend long videos.
+
 (ii) We propose a training-free mosaicing binary coding together with pseudo temporal grounding for long video understanding.
 
 (iii) We apply our CoS into three various baseline to demonstrate its effectiveness and adaptability.
