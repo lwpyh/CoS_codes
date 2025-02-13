@@ -60,9 +60,9 @@ accelerate launch --num_processes 8 --main_process_port 12345 -m lmms_eval \
 If you find this repository useful, please consider giving a star :star: and citation
 
 ```
-@article{jian2024CoS,
+@article{hu2025cos,
   title={CoS: Chain-of-Shot Prompting for Long Video Understanding},
-  author={Jian, Hu and Zixu, Cheng and Chenyang, Si and Wei, Li and Shaogang, Gong},
+  author={Hu, Jian and Cheng, Zixu and Si, Chenyang and Li, Wei and Gong, Shaogang},
   journal={arXiv preprint arXiv:2502.06428},
   year={2025}
 }
